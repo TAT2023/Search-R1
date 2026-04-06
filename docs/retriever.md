@@ -112,7 +112,7 @@ We support both [Google Search API](https://developers.google.com/custom-search/
 
 ```bash
 search_url=https://serpapi.com/search
-serp_api_key="" # put your serp api key here (https://serpapi.com/)
+serp_api_key="a061f6379a1179afb69f6b15fabcc280b0d1957764cd1ef667468f1b1eff9fd6" # put your serp api key here (https://serpapi.com/)
 
 python search_r1/search/serp_search_server.py --search_url $search_url --topk 3 --serp_api_key $serp_api_key
 ```
