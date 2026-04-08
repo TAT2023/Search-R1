@@ -24,10 +24,11 @@ export EXPERIMENT_NAME=nq-search-r1-ppo-qwen2.5-3b-em
 
 # set -x
 export VLLM_ATTENTION_BACKEND=XFORMERS # vllm + qwen2-7b with flash_attn has some issues
+LOG_FILE=$EXPERIMENT_NAME.log
 
 # max_prompt_length = (config['training']['max_start_length'] + config['training']['max_response_length'] * (config['training']['max_turns'] - 1) + config['training']['max_obs_length'] * config['training']['max_turns'])
 
-PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
+nohup env PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     data.train_files=$DATA_DIR/train.parquet \
     data.val_files=$DATA_DIR/test.parquet \
     data.train_data_num=null \
@@ -90,4 +91,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     max_turns=2 \
     retriever.url="http://127.0.0.1:8000/retrieve" \
     retriever.topk=3 \
-    2>&1 | tee $EXPERIMENT_NAME.log
+    > $LOG_FILE 2>&1 &
+
+TRAIN_PID=$!
+echo "PPO training started in background. PID=$TRAIN_PID, log=$LOG_FILE"
