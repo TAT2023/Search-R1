@@ -708,6 +708,7 @@ class RayPPOTrainer(object):
                 # original code here
 
                 with _timer('step', timing_raw):
+                    print(f'Rollouting... epoch {epoch}, step {self.global_steps}')
                     if not self.config.do_search:
                         gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
 
@@ -807,6 +808,7 @@ class RayPPOTrainer(object):
                     # update critic
                     if self.use_critic:
                         with _timer('update_critic', timing_raw):
+                            print(f'Updating... critic epoch {epoch}, step {self.global_steps}')
                             critic_output = self.critic_wg.update_critic(batch)
                         critic_output_metrics = reduce_metrics(critic_output.meta_info['metrics'])
                         metrics.update(critic_output_metrics)
@@ -815,6 +817,7 @@ class RayPPOTrainer(object):
                     if self.config.trainer.critic_warmup <= self.global_steps:
                         # update actor
                         with _timer('update_actor', timing_raw):
+                            print(f'Updating... actor epoch {epoch}, step {self.global_steps}')
                             if self.config.do_search and self.config.actor_rollout_ref.actor.state_masking:
                                 batch, metrics = self._create_loss_mask(batch, metrics)
                             actor_output = self.actor_rollout_wg.update_actor(batch)

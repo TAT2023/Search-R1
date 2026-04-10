@@ -314,7 +314,7 @@ class LLMGenerationManager:
         meta_info['valid_action_stats'] = valid_action_stats.tolist()
         meta_info['valid_search_stats'] = valid_search_stats.tolist()
         
-        print("ACTIVE_TRAJ_NUM:", active_num_list)
+        print("Rollouting... ACTIVE_TRAJ_NUM:", active_num_list)
         
         return self._compose_final_output(original_left_side, original_right_side, meta_info)
 
