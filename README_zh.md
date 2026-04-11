@@ -100,8 +100,8 @@ pip install uvicorn fastapi
 
 (1) 下载索引和语料库。
 ```bash
-save_path=/the/path/to/save
-python scripts/download.py --save_path $save_path
+save_path=/root/shared-nvme/wiki
+nohup python scripts/download.py --save_path $save_path > download.log 2>&1 &
 cat $save_path/part_* > $save_path/e5_Flat.index
 gzip -d $save_path/wiki-18.jsonl.gz
 ```
