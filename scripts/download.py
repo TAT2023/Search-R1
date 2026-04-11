@@ -1,5 +1,6 @@
 import argparse
 import os
+import time
 from pathlib import Path
 
 import requests
@@ -20,41 +21,63 @@ def download_with_progress(repo_id: str, filename: str, save_path: str, repo_typ
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
     tmp_path = target_path.with_suffix(target_path.suffix + ".part")
-    resume_size = tmp_path.stat().st_size if tmp_path.exists() else 0
 
-    headers = {}
+    # If the final file already exists, skip it and clean stale partial files.
+    if target_path.exists():
+        if tmp_path.exists():
+            tmp_path.unlink()
+        print(f"{filename}: already exists, skip")
+        return
+
+    base_headers = {}
     if token:
-        headers["Authorization"] = f"Bearer {token}"
-    if resume_size > 0:
-        headers["Range"] = f"bytes={resume_size}-"
+        base_headers["Authorization"] = f"Bearer {token}"
 
-    with requests.get(url, stream=True, headers=headers, timeout=60) as response:
-        # If server doesn't honor range request, restart from scratch.
-        if response.status_code == 200 and resume_size > 0:
-            resume_size = 0
+    max_retries = 20
+    attempt = 0
 
-        response.raise_for_status()
+    while True:
+        resume_size = tmp_path.stat().st_size if tmp_path.exists() else 0
+        headers = dict(base_headers)
+        if resume_size > 0:
+            headers["Range"] = f"bytes={resume_size}-"
 
-        content_length = int(response.headers.get("Content-Length", 0))
-        total_size = content_length + resume_size if content_length > 0 else None
-        write_mode = "ab" if resume_size > 0 else "wb"
+        try:
+            with requests.get(url, stream=True, headers=headers, timeout=(10, 600)) as response:
+                # If server doesn't honor range request, restart this file from scratch.
+                if response.status_code == 200 and resume_size > 0:
+                    resume_size = 0
 
-        with open(tmp_path, write_mode) as f, tqdm(
-            total=total_size,
-            initial=resume_size,
-            unit="B",
-            unit_scale=True,
-            unit_divisor=1024,
-            desc=filename,
-            mininterval=0.2,
-        ) as pbar:
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                if not chunk:
-                    continue
-                f.write(chunk)
-                pbar.update(len(chunk))
+                response.raise_for_status()
 
-    os.replace(tmp_path, target_path)
+                content_length = int(response.headers.get("Content-Length", 0))
+                total_size = content_length + resume_size if content_length > 0 else None
+                write_mode = "ab" if resume_size > 0 else "wb"
+
+                with open(tmp_path, write_mode) as f, tqdm(
+                    total=total_size,
+                    initial=resume_size,
+                    unit="B",
+                    unit_scale=True,
+                    unit_divisor=1024,
+                    desc=filename,
+                    mininterval=0.2,
+                ) as pbar:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        pbar.update(len(chunk))
+
+            os.replace(tmp_path, target_path)
+            return
+        except requests.RequestException as e:
+            attempt += 1
+            if attempt >= max_retries:
+                raise RuntimeError(f"Download failed for {filename} after {max_retries} retries") from e
+            wait_seconds = min(30, attempt * 2)
+            print(f"{filename}: network issue ({e}), retry {attempt}/{max_retries} in {wait_seconds}s")
+            time.sleep(wait_seconds)
 
 
 hf_token = args.token or os.getenv("HF_TOKEN")
