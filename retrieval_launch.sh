@@ -11,7 +11,6 @@ nohup python search_r1/search/retrieval_server.py --index_path $index_file \
                                                    --topk 3 \
                                                    --retriever_name $retriever_name \
                                                    --retriever_model $retriever_path \
-                                                   --faiss_gpu \
                                                    > $LOG_FILE 2>&1 &
 
 RETRIEVAL_PID=$!
