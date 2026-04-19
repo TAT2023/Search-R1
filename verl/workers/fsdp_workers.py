@@ -44,6 +44,45 @@ logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv('VERL_PPO_LOGGING_LEVEL', 'WARN'))
 
 
+def _build_optimizer(parameters, named_parameters_list, optim_config, role_name: str):
+    from torch import optim
+
+    optimizer_type = str(optim_config.get('type', 'adamw')).lower()
+    base_optimizer = optim.AdamW(parameters,
+                                 lr=optim_config.lr,
+                                 betas=optim_config.get('betas', (0.9, 0.999)),
+                                 weight_decay=optim_config.get('weight_decay', 1e-2))
+
+    if optimizer_type == 'adamw':
+        return base_optimizer
+
+    if optimizer_type != 'badam':
+        raise ValueError(f'Unsupported optimizer type `{optimizer_type}` for {role_name}.')
+
+    try:
+        from badam import BlockOptimizer
+    except ImportError as exc:
+        raise ImportError('BAdam is not installed. Please run `pip install badam` in the training environment.') from exc
+
+    badam_kwargs = {
+        'base_optimizer': base_optimizer,
+        'named_parameters_list': named_parameters_list,
+        'switch_block_every': int(optim_config.get('switch_block_every', 100)),
+        'switch_mode': optim_config.get('switch_mode', 'random'),
+        'verbose': int(optim_config.get('verbose', 1)),
+    }
+
+    for key in ('active_modules', 'block_prefix_list', 'include_embedding', 'include_lm_head'):
+        value = optim_config.get(key, None)
+        if value is not None:
+            badam_kwargs[key] = value
+
+    logger.warning('Using BAdam optimizer for %s with switch_block_every=%s',
+                   role_name,
+                   badam_kwargs['switch_block_every'])
+    return BlockOptimizer(**badam_kwargs)
+
+
 class ActorRolloutRefWorker(Worker):
     """
     This worker can be instantiated as a standalone actor or a standalone rollout or a standalone reference policy
@@ -120,7 +159,6 @@ class ActorRolloutRefWorker(Worker):
         from verl.utils.torch_dtypes import PrecisionType
         from transformers import AutoModelForCausalLM, AutoConfig
         from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy, MixedPrecision
-        from torch import optim
 
         log_gpu_memory_usage('Before init from HF AutoModel', logger=logger)
         local_path = copy_local_path_from_hdfs(model_path)
@@ -209,10 +247,14 @@ class ActorRolloutRefWorker(Worker):
             sharding_strategy = ShardingStrategy.FULL_SHARD
 
         # TODO: add transformer policy
+        optimizer_type = 'adamw'
+        if self._is_actor and optim_config is not None:
+            optimizer_type = str(optim_config.get('type', 'adamw')).lower()
+
         actor_module_fsdp = FSDP(
             actor_module,
             param_init_fn=init_fn,
-            use_orig_params=False,
+            use_orig_params=(optimizer_type == 'badam'),
             auto_wrap_policy=auto_wrap_policy,
             device_id=torch.cuda.current_device(),
             sharding_strategy=sharding_strategy,  # zero3
@@ -226,10 +268,10 @@ class ActorRolloutRefWorker(Worker):
         # TODO: add more optimizer args into config
         if self._is_actor:
             from verl.utils.torch_functional import get_constant_schedule_with_warmup
-            actor_optimizer = optim.AdamW(actor_module_fsdp.parameters(),
-                                          lr=optim_config.lr,
-                                          betas=optim_config.get('betas', (0.9, 0.999)),
-                                          weight_decay=optim_config.get('weight_decay', 1e-2))
+            actor_optimizer = _build_optimizer(parameters=actor_module_fsdp.parameters(),
+                                               named_parameters_list=list(actor_module_fsdp.named_parameters()),
+                                               optim_config=optim_config,
+                                               role_name='actor')
 
             total_steps = optim_config.get('total_training_steps', 0)
             num_warmup_steps_ratio = optim_config.get('lr_warmup_steps_ratio', 0.)
@@ -573,7 +615,6 @@ class CriticWorker(Worker):
         from verl.utils.model import LambdaLayer, print_model_size, squeeze
         from verl.utils.torch_dtypes import PrecisionType
         from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy, MixedPrecision
-        from torch import optim
 
         local_path = copy_local_path_from_hdfs(config.model.path)
         # note that the tokenizer between actor and critic may be different. So override tokenizer info with actor info
@@ -652,7 +693,7 @@ class CriticWorker(Worker):
 
         critic_module = FSDP(critic_module,
                              param_init_fn=init_fn,
-                             use_orig_params=False,
+                             use_orig_params=(str(config.optim.get('type', 'adamw')).lower() == 'badam'),
                              auto_wrap_policy=auto_wrap_policy,
                              device_id=torch.cuda.current_device(),
                              sharding_strategy=ShardingStrategy.FULL_SHARD,
@@ -662,10 +703,10 @@ class CriticWorker(Worker):
 
         log_gpu_memory_usage('After critic FSDP', logger=None)
 
-        critic_optimizer = optim.AdamW(critic_module.parameters(),
-                                       lr=config.optim.lr,
-                                       betas=config.optim.get('betas', (0.9, 0.999)),
-                                       weight_decay=config.optim.get('weight_decay', 1e-2))
+        critic_optimizer = _build_optimizer(parameters=critic_module.parameters(),
+                            named_parameters_list=list(critic_module.named_parameters()),
+                            optim_config=config.optim,
+                            role_name='critic')
 
         total_steps = config.optim.get('total_training_steps', 0)
         num_warmup_steps_ratio = config.optim.get('lr_warmup_steps_ratio', 0.)
